@@ -1,0 +1,31 @@
+services:
+  server:
+    image: ghcr.io/tarvitave/squansq-server:latest
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      DB_URL: "file:/data/squansq.db"
+      JWT_SECRET: "${JWT_SECRET}"
+    volumes:
+      - db_data:/data
+      # Persist Claude auth across container restarts (authenticate once, stays logged in)
+      - claude_auth:/root/.claude
+      # Mount your project directories so WorkerBees can read and edit code
+      # Add one entry per project you want Squansq to manage
+      - "${PROJECTS_PATH}:/projects"
+    cap_add:
+      - SYS_PTRACE
+    devices:
+      - /dev/ptmx:/dev/ptmx
+
+  client:
+    image: ghcr.io/tarvitave/squansq-client:latest
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    depends_on:
+      - server
+
+volumes:
+  db_data:
+  claude_auth:
