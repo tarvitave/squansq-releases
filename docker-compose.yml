@@ -1,31 +1,96 @@
-services:
-  server:
-    image: ghcr.io/tarvitave/squansq-server:latest
-    restart: unless-stopped
-    environment:
-      PORT: "3001"
-      DB_URL: "file:/data/squansq.db"
-      JWT_SECRET: "${JWT_SECRET}"
-    volumes:
-      - db_data:/data
-      # Persist Claude auth across container restarts (authenticate once, stays logged in)
-      - claude_auth:/root/.claude
-      # Mount your project directories so WorkerBees can read and edit code
-      # Add one entry per project you want Squansq to manage
-      - "${PROJECTS_PATH}:/projects"
-    cap_add:
-      - SYS_PTRACE
-    devices:
-      - /dev/ptmx:/dev/ptmx
+version: '3.8'
 
-  client:
-    image: ghcr.io/tarvitave/squansq-client:latest
-    restart: unless-stopped
+services:
+  # SquansQ Server (Backend + Root Agent)
+  server:
+    image: ghcr.io/tarvitave/squansq:v2.0.0
+    container_name: squansq-server
     ports:
-      - "${PORT:-80}:80"
+      - "3001:3001"
+    environment:
+      # Phase 1: Multi-Model Support
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      
+      # Default Provider Settings
+      - DEFAULT_PROVIDER=${DEFAULT_PROVIDER:-anthropic}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-claude-3-5-sonnet-20241022}
+      
+      # Provider Fallback Chain (JSON)
+      - PROVIDER_FALLBACK_CONFIG=${PROVIDER_FALLBACK_CONFIG:-}
+      
+      # Context Management
+      - CONTEXT_WARNING_THRESHOLD=${CONTEXT_WARNING_THRESHOLD:-0.7}
+      - CONTEXT_COMPACTION_THRESHOLD=${CONTEXT_COMPACTION_THRESHOLD:-0.8}
+      - CONTEXT_COMPACTION_STRATEGY=${CONTEXT_COMPACTION_STRATEGY:-summarization}
+      
+      # Phase 2: Recipes & CLI
+      - RECIPES_DIR=${RECIPES_DIR:-/app/recipes}
+      - MAX_CONCURRENT_SUBAGENTS=${MAX_CONCURRENT_SUBAGENTS:-5}
+      
+      # Database
+      - DATABASE_PATH=/data/squansq.db
+      
+      # Node Environment
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=3001
+    volumes:
+      - squansq-data:/data
+      - squansq-repos:/repos
+      - squansq-recipes:/app/recipes
+      - /var/run/docker.sock:/var/run/docker.sock  # For WorkerBee containers
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # SquansQ Client (Web UI)
+  client:
+    image: ghcr.io/tarvitave/squansq-client:v2.0.0
+    container_name: squansq-client
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:3001
+      - REACT_APP_WS_URL=ws://localhost:3001
     depends_on:
       - server
+    restart: unless-stopped
+
+  # Optional: PostgreSQL for production deployments
+  # Uncomment if you want to use PostgreSQL instead of SQLite
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: squansq-postgres
+  #   environment:
+  #     - POSTGRES_DB=squansq
+  #     - POSTGRES_USER=squansq
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U squansq"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
 volumes:
-  db_data:
-  claude_auth:
+  squansq-data:
+    driver: local
+  squansq-repos:
+    driver: local
+  squansq-recipes:
+    driver: local
+  # postgres-data:
+  #   driver: local
+
+networks:
+  default:
+    name: squansq-network
